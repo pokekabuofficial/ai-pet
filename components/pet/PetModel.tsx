@@ -385,7 +385,7 @@ export default function PetModel({ emotion, onFlash, interactionTime = 0 }: PetM
 
   return (
     <group ref={groupRef} position={[0, -0.5, 0]}>
-      <primitive object={scene} />
+      <primitive object={scene} rotation={[0, Math.PI, 0]} />
       
       {/* Red point light for angry aura */}
       {emotion === 'angry' && (
