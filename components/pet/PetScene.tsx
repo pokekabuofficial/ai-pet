@@ -6,8 +6,10 @@ import { OrbitControls } from '@react-three/drei'
 import PetModel from './PetModel'
 import PetBubble from './PetBubble'
 import PetControls from './PetControls'
+import Background from './Background'
 
 export type EmotionType = 'idle' | 'angry' | 'sad' | 'happy' | 'sleep' | 'surprise' | 'jump' | 'touch'
+type BackgroundType = 'outside' | 'room'
 
 export type BubbleMessage = {
   id: number
@@ -18,6 +20,7 @@ export default function PetScene() {
   const [emotion, setEmotion] = useState<EmotionType>('idle')
   const [bubbles, setBubbles] = useState<BubbleMessage[]>([])
   const [showFlash, setShowFlash] = useState(false)
+  const [backgroundType, setBackgroundType] = useState<BackgroundType>('outside')
   const bubbleIdRef = useRef(0)
 
   const triggerFlash = useCallback(() => {
@@ -47,6 +50,29 @@ export default function PetScene() {
 
   return (
     <div className="relative w-full h-screen">
+      {/* Background toggle buttons */}
+      <div className="absolute top-4 left-4 z-50 flex gap-2">
+        <button
+          onClick={() => setBackgroundType('outside')}
+          className={`px-4 py-2 rounded-lg font-semibold transition-all ${
+            backgroundType === 'outside'
+              ? 'bg-gradient-to-br from-sky-400 to-sky-500 text-white shadow-lg'
+              : 'bg-white/70 text-gray-700 hover:bg-white/90'
+          }`}
+        >
+          🌿 そと
+        </button>
+        <button
+          onClick={() => setBackgroundType('room')}
+          className={`px-4 py-2 rounded-lg font-semibold transition-all ${
+            backgroundType === 'room'
+              ? 'bg-gradient-to-br from-amber-300 to-rose-300 text-white shadow-lg'
+              : 'bg-white/70 text-gray-700 hover:bg-white/90'
+          }`}
+        >
+          🏠 おへや
+        </button>
+      </div>
       {/* Bubbles */}
       <div className="absolute inset-0 pointer-events-none z-20 flex flex-col items-center justify-start pt-16 gap-2">
         {bubbles.map(b => (
@@ -85,6 +111,7 @@ export default function PetScene() {
         <ambientLight intensity={1.2} />
         <directionalLight position={[5, 10, 5]} intensity={1.5} castShadow />
         <pointLight position={[-3, 3, 3]} intensity={0.6} color="#ffb7c5" />
+        <Background type={backgroundType} />
         <PetModel emotion={emotion} onFlash={triggerFlash} />
         <OrbitControls
           enablePan={false}
