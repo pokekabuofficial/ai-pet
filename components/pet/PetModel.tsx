@@ -98,6 +98,7 @@ export default function PetModel({ emotion, onFlash, interactionTime = 0 }: PetM
   const landingSquashRef = useRef(0)
   const wasJumpingRef = useRef(false)
   const lastInteractionRef = useRef(0)
+  const targetRotYRef = useRef(0)
 
   // Particle states
   const [hearts, setHearts] = useState<{ id: number; pos: [number, number, number] }[]>([])
