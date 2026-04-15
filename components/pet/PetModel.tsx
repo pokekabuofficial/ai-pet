@@ -1,7 +1,7 @@
 'use client'
 
 import { useRef, useEffect, useState } from 'react'
-import { useFrame, useThree } from '@react-three/fiber'
+import { useFrame } from '@react-three/fiber'
 import { useGLTF, Html } from '@react-three/drei'
 import * as THREE from 'three'
 import type { EmotionType } from './PetScene'
@@ -45,7 +45,7 @@ function HeartParticle({ startPos, onComplete }: { startPos: [number, number, nu
   return (
     <group ref={ref} position={startPos}>
       <Html center style={{ pointerEvents: 'none' }}>
-        <span className="text-2xl select-none" style={{ opacity: 1 }}>❤️</span>
+        <span className="text-2xl select-none" style={{ opacity: 1 }}>&#10084;&#65039;</span>
       </Html>
     </group>
   )
@@ -83,7 +83,16 @@ function TearParticle({ startPos, onComplete }: { startPos: [number, number, num
 export default function PetModel({ emotion, onFlash, interactionTime = 0 }: PetModelProps) {
   const groupRef = useRef<THREE.Group>(null!)
   const { scene } = useGLTF('/soft_toy_3d_model.glb')
-  const { camera } = useThree()
+
+  // Bone refs
+  const rootBoneRef = useRef<THREE.Bone | null>(null)
+  const spineBoneRef = useRef<THREE.Bone | null>(null)
+  const earBonesRef = useRef<THREE.Bone[]>([])
+  const tailBonesRef = useRef<THREE.Bone[]>([])
+  const eyeBonesRef = useRef<THREE.Bone[]>([])
+
+  // Initial bone transforms (to reset)
+  const initialBoneStates = useRef<Map<THREE.Bone, { rotation: THREE.Euler; scale: THREE.Vector3; position: THREE.Vector3 }>>(new Map())
 
   // Refs for animation state
   const timeRef = useRef(0)
@@ -97,7 +106,6 @@ export default function PetModel({ emotion, onFlash, interactionTime = 0 }: PetM
   const prevEmotionRef = useRef<EmotionType>('idle')
   const landingSquashRef = useRef(0)
   const wasJumpingRef = useRef(false)
-  const lastInteractionRef = useRef(0)
 
   // Particle states
   const [hearts, setHearts] = useState<{ id: number; pos: [number, number, number] }[]>([])
@@ -106,18 +114,62 @@ export default function PetModel({ emotion, onFlash, interactionTime = 0 }: PetM
   const tearIdRef = useRef(0)
   const tearTimerRef = useRef(0)
 
-  // Collect mesh refs by name
-  const tailMeshes = useRef<THREE.Object3D[]>([])
-  const eyelidMeshes = useRef<THREE.Object3D[]>([])
-
+  // Traverse scene to find bones
   useEffect(() => {
-    tailMeshes.current = []
-    eyelidMeshes.current = []
+    earBonesRef.current = []
+    tailBonesRef.current = []
+    eyeBonesRef.current = []
+    initialBoneStates.current.clear()
+
     scene.traverse((obj) => {
-      const name = obj.name.toLowerCase()
-      if (name.includes('tail')) tailMeshes.current.push(obj)
-      if (name.includes('eyelid') || name.includes('eye_lid') || name.includes('blink')) eyelidMeshes.current.push(obj)
+      if (obj instanceof THREE.Bone) {
+        const name = obj.name.toLowerCase()
+
+        // Store initial state
+        initialBoneStates.current.set(obj, {
+          rotation: obj.rotation.clone(),
+          scale: obj.scale.clone(),
+          position: obj.position.clone(),
+        })
+
+        // Find root bone (usually first bone or named "root", "armature", "hips")
+        if (!rootBoneRef.current && (name.includes('root') || name.includes('armature') || name.includes('hips') || obj.parent instanceof THREE.SkinnedMesh || obj.parent?.type === 'Bone' === false)) {
+          // Check if this is a top-level bone
+          if (!(obj.parent instanceof THREE.Bone)) {
+            rootBoneRef.current = obj
+          }
+        }
+
+        // Find spine bone
+        if (name.includes('spine') || name.includes('torso') || name.includes('body')) {
+          spineBoneRef.current = obj
+        }
+
+        // Find ear bones
+        if (name.includes('ear')) {
+          earBonesRef.current.push(obj)
+        }
+
+        // Find tail bones
+        if (name.includes('tail')) {
+          tailBonesRef.current.push(obj)
+        }
+
+        // Find eye/eyelid bones
+        if (name.includes('eye') || name.includes('lid')) {
+          eyeBonesRef.current.push(obj)
+        }
+      }
     })
+
+    // Fallback: if no root found, use first bone encountered
+    if (!rootBoneRef.current) {
+      scene.traverse((obj) => {
+        if (obj instanceof THREE.Bone && !rootBoneRef.current) {
+          rootBoneRef.current = obj
+        }
+      })
+    }
   }, [scene])
 
   // Trigger shake + flash + hearts on touch
@@ -166,62 +218,44 @@ export default function PetModel({ emotion, onFlash, interactionTime = 0 }: PetM
     emotionTimerRef.current += delta
     const t = timeRef.current
     const group = groupRef.current
+    const rootBone = rootBoneRef.current
+    const spineBone = spineBoneRef.current || rootBone
 
-    // Defaults
-    let scaleBase = 1.0
-    let scaleY = 1.0
-    let posY = 0
-    let rotY = group.rotation.y
-    let rotX = 0
-    let rotZ = 0
+    // Reset bones to initial state each frame
+    initialBoneStates.current.forEach((state, bone) => {
+      bone.rotation.copy(state.rotation)
+      bone.scale.copy(state.scale)
+      bone.position.copy(state.position)
+    })
 
-    // Always face camera direction
-    const targetCameraRotY = Math.atan2(
-      camera.position.x - group.position.x,
-      camera.position.z - group.position.z
-    )
-    targetRotYRef.current = targetCameraRotY
+    // Model always faces front (rotation.y = 0)
+    group.rotation.y = 0
 
-    // Check if should return to front (3 seconds after last interaction)
-    const timeSinceInteraction = Date.now() - interactionTime
-    const shouldReturnToFront = timeSinceInteraction > 3000
-
-    // Smooth rotation based on state
-    if (emotion === 'happy') {
-      // Always look at camera during happy state
-      rotY = THREE.MathUtils.lerp(group.rotation.y, targetCameraRotY, delta * 3)
-    } else if (shouldReturnToFront) {
-      // Smoothly return to front (rotY = 0) after 3 seconds
-      rotY = THREE.MathUtils.lerp(group.rotation.y, 0, delta * 0.8)
-    } else {
-      // Face camera normally
-      rotY = THREE.MathUtils.lerp(group.rotation.y, targetCameraRotY, delta * 2)
-    }
-
-
-    // Breathing
+    // === BREATHING ===
     let breathSpeed = 1.2
     let breathAmp = 0.03
     if (emotion === 'sleep') {
       breathSpeed = 0.4
       breathAmp = 0.015
     }
-    const breathScale = scaleBase + Math.sin(t * breathSpeed * Math.PI * 2) * breathAmp
-
-    // Hop
-    let hopAmp = 0.0
-    let hopSpeed = 1.0
-    if (emotion === 'idle') {
-      hopAmp = 0.04
-      hopSpeed = 0.8
+    const breathScale = 1.0 + Math.sin(t * breathSpeed * Math.PI * 2) * breathAmp
+    if (spineBone) {
+      spineBone.scale.set(breathScale, breathScale, breathScale)
     }
 
-    // Tail wag
-    tailMeshes.current.forEach((m) => {
-      m.rotation.y = Math.sin(t * Math.PI * 2 * 1.5) * 0.4
+    // === EAR TWITCH ===
+    earBonesRef.current.forEach((ear) => {
+      const earWiggle = Math.sin(t * Math.PI * 2 * 2.5) * 0.08
+      ear.rotation.z += earWiggle
     })
 
-    // Blink
+    // === TAIL WAG ===
+    tailBonesRef.current.forEach((tail, index) => {
+      const tailWag = Math.sin(t * Math.PI * 2 * 1.5 + index * 0.5) * 0.4
+      tail.rotation.y += tailWag
+    })
+
+    // === BLINK ===
     blinkTimerRef.current += delta
     if (blinkPhaseRef.current === 0 && blinkTimerRef.current >= nextBlinkRef.current) {
       blinkPhaseRef.current = 1
@@ -230,18 +264,18 @@ export default function PetModel({ emotion, onFlash, interactionTime = 0 }: PetM
     if (blinkPhaseRef.current === 1) {
       blinkTRef.current += delta * 10
       const v = Math.min(blinkTRef.current, 1)
-      eyelidMeshes.current.forEach(m => {
-        if ((m as THREE.Mesh).scale) {
-          (m as THREE.Mesh).scale.y = 1 - v
-        }
+      eyeBonesRef.current.forEach((eye) => {
+        // Close eye by rotating X axis
+        eye.rotation.x += v * 0.5
       })
       if (v >= 1) { blinkPhaseRef.current = 2; blinkTRef.current = 0 }
     }
     if (blinkPhaseRef.current === 2) {
       blinkTRef.current += delta * 10
       const v = Math.min(blinkTRef.current, 1)
-      eyelidMeshes.current.forEach(m => {
-        if ((m as THREE.Mesh).scale) (m as THREE.Mesh).scale.y = v
+      eyeBonesRef.current.forEach((eye) => {
+        // Open eye
+        eye.rotation.x += (1 - v) * 0.5
       })
       if (v >= 1) {
         blinkPhaseRef.current = 0
@@ -250,23 +284,47 @@ export default function PetModel({ emotion, onFlash, interactionTime = 0 }: PetM
       }
     }
 
-    // Landing squash decay
+    // === IDLE HOP ===
+    let posY = 0
+    if (emotion === 'idle') {
+      posY = Math.sin(t * Math.PI * 2 * 0.8) * 0.04
+    }
+
+    // === LANDING SQUASH ===
+    let scaleY = 1.0
     if (landingSquashRef.current > 0) {
       landingSquashRef.current -= delta * 4
       if (landingSquashRef.current < 0) landingSquashRef.current = 0
       scaleY = 1 - landingSquashRef.current * 0.3
     }
 
-    // Emotion overrides
-    if (emotion === 'angry') {
-      rotZ = Math.sin(t * Math.PI * 2 * 14) * 0.15
-      hopAmp = 0
+    // === EMOTION ANIMATIONS ===
+    
+    // TOUCH: Z axis shake on root
+    if (emotion === 'touch') {
+      if (shakeActiveRef.current) {
+        shakeRef.current += delta
+        const progress = shakeRef.current / 0.5
+        if (progress >= 1) {
+          shakeActiveRef.current = false
+        } else if (rootBone) {
+          const decay = 1 - progress
+          rootBone.rotation.z += Math.sin(progress * Math.PI * 2 * 10) * 0.12 * decay
+        }
+      }
     }
 
+    // ANGRY: Intense left-right shake
+    if (emotion === 'angry' && rootBone) {
+      rootBone.rotation.z += Math.sin(t * Math.PI * 2 * 14) * 0.15
+    }
+
+    // SAD: Forward lean + tears
     if (emotion === 'sad') {
-      rotX = 0.35
-      rotZ = Math.sin(t * Math.PI * 2 * 0.5) * 0.06
-      hopAmp = 0
+      if (rootBone) {
+        rootBone.rotation.x += 0.35
+        rootBone.rotation.z += Math.sin(t * Math.PI * 2 * 0.5) * 0.06
+      }
       
       // Spawn tears periodically
       tearTimerRef.current += delta
@@ -282,36 +340,36 @@ export default function PetModel({ emotion, onFlash, interactionTime = 0 }: PetM
       tearTimerRef.current = 0
     }
 
+    // HAPPY: Y axis fast rotation + bounce
     if (emotion === 'happy') {
-      // Spin + face camera gradually
-      hopAmp = 0.12
-      hopSpeed = 2.0
+      if (rootBone) {
+        rootBone.rotation.y += t * 3 // Fast spin
+      }
+      posY = Math.abs(Math.sin(t * Math.PI * 2 * 2.0)) * 0.12
     }
 
-    if (emotion === 'sleep') {
-      rotZ = Math.min(emotionTimerRef.current * 0.4, 0.45)
-      hopAmp = 0
+    // SLEEP: Slow Z tilt
+    if (emotion === 'sleep' && rootBone) {
+      rootBone.rotation.z += Math.min(emotionTimerRef.current * 0.4, 0.45)
     }
 
-    if (emotion === 'surprise') {
+    // SURPRISE: Scale spike
+    if (emotion === 'surprise' && rootBone) {
       const et = Math.min(emotionTimerRef.current / 0.15, 1)
-      scaleBase = 1 + Math.sin(et * Math.PI) * 0.35
-      hopAmp = 0
+      const surpriseScale = 1 + Math.sin(et * Math.PI) * 0.35
+      rootBone.scale.set(surpriseScale, surpriseScale, surpriseScale)
     }
 
+    // JUMP: Higher jump (2x) with squash
     if (emotion === 'jump') {
-      // Higher jump (2x) with squash on landing
       const et = emotionTimerRef.current
       const jumpDuration = 0.8
-      const jumpHeight = 1.6 // doubled from 0.8
+      const jumpHeight = 1.6
       posY = Math.max(0, Math.sin(et * Math.PI / jumpDuration) * jumpHeight)
-      hopAmp = 0
       
-      // Track if we were in air
       if (posY > 0.1) {
         wasJumpingRef.current = true
       }
-      // Detect landing
       if (wasJumpingRef.current && posY < 0.05 && et > jumpDuration * 0.5) {
         landingSquashRef.current = 1
         wasJumpingRef.current = false
@@ -320,25 +378,9 @@ export default function PetModel({ emotion, onFlash, interactionTime = 0 }: PetM
       wasJumpingRef.current = false
     }
 
-    if (emotion === 'touch') {
-      if (shakeActiveRef.current) {
-        shakeRef.current += delta
-        const progress = shakeRef.current / 0.5
-        if (progress >= 1) {
-          shakeActiveRef.current = false
-        } else {
-          const decay = 1 - progress
-          rotZ = Math.sin(progress * Math.PI * 2 * 10) * 0.12 * decay
-        }
-      }
-    }
-
-    // Apply transforms
-    group.position.y = posY + Math.sin(t * Math.PI * 2 * hopSpeed) * hopAmp
-    group.rotation.x = rotX
-    group.rotation.y = rotY
-    group.rotation.z = rotZ
-    group.scale.set(breathScale * scaleBase, breathScale * scaleBase * scaleY, breathScale * scaleBase)
+    // Apply group transforms
+    group.position.y = -0.5 + posY
+    group.scale.set(1, scaleY, 1)
   })
 
   return (
