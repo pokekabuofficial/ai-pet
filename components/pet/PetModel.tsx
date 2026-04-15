@@ -9,6 +9,7 @@ import type { EmotionType } from './PetScene'
 interface PetModelProps {
   emotion: EmotionType
   onFlash?: () => void
+  interactionTime?: number
 }
 
 // Heart particle component
@@ -79,7 +80,7 @@ function TearParticle({ startPos, onComplete }: { startPos: [number, number, num
   )
 }
 
-export default function PetModel({ emotion, onFlash }: PetModelProps) {
+export default function PetModel({ emotion, onFlash, interactionTime = 0 }: PetModelProps) {
   const groupRef = useRef<THREE.Group>(null!)
   const { scene } = useGLTF('/soft_toy_3d_model.glb')
   const { camera } = useThree()
@@ -96,6 +97,7 @@ export default function PetModel({ emotion, onFlash }: PetModelProps) {
   const prevEmotionRef = useRef<EmotionType>('idle')
   const landingSquashRef = useRef(0)
   const wasJumpingRef = useRef(false)
+  const lastInteractionRef = useRef(0)
 
   // Particle states
   const [hearts, setHearts] = useState<{ id: number; pos: [number, number, number] }[]>([])
@@ -172,6 +174,30 @@ export default function PetModel({ emotion, onFlash }: PetModelProps) {
     let rotY = group.rotation.y
     let rotX = 0
     let rotZ = 0
+
+    // Always face camera direction
+    const targetCameraRotY = Math.atan2(
+      camera.position.x - group.position.x,
+      camera.position.z - group.position.z
+    )
+    targetRotYRef.current = targetCameraRotY
+
+    // Check if should return to front (3 seconds after last interaction)
+    const timeSinceInteraction = Date.now() - interactionTime
+    const shouldReturnToFront = timeSinceInteraction > 3000
+
+    // Smooth rotation based on state
+    if (emotion === 'happy') {
+      // Always look at camera during happy state
+      rotY = THREE.MathUtils.lerp(group.rotation.y, targetCameraRotY, delta * 3)
+    } else if (shouldReturnToFront) {
+      // Smoothly return to front (rotY = 0) after 3 seconds
+      rotY = THREE.MathUtils.lerp(group.rotation.y, 0, delta * 0.8)
+    } else {
+      // Face camera normally
+      rotY = THREE.MathUtils.lerp(group.rotation.y, targetCameraRotY, delta * 2)
+    }
+
 
     // Breathing
     let breathSpeed = 1.2
@@ -258,13 +284,6 @@ export default function PetModel({ emotion, onFlash }: PetModelProps) {
 
     if (emotion === 'happy') {
       // Spin + face camera gradually
-      const targetRotY = Math.atan2(
-        camera.position.x - group.position.x,
-        camera.position.z - group.position.z
-      )
-      rotY = THREE.MathUtils.lerp(group.rotation.y, targetRotY, delta * 3)
-      
-      // Bounce
       hopAmp = 0.12
       hopSpeed = 2.0
     }

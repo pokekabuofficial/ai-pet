@@ -19,6 +19,7 @@ export default function PetScene() {
   const [bubbles, setBubbles] = useState<BubbleMessage[]>([])
   const [showFlash, setShowFlash] = useState(false)
   const bubbleIdRef = useRef(0)
+  const interactionTimeRef = useRef(0)
 
   const triggerFlash = useCallback(() => {
     setShowFlash(true)
@@ -35,6 +36,7 @@ export default function PetScene() {
 
   const triggerEmotion = useCallback((e: EmotionType, msg?: string) => {
     setEmotion(e)
+    interactionTimeRef.current = Date.now()
     if (msg) addBubble(msg)
     if (e !== 'sleep') {
       setTimeout(() => setEmotion('idle'), e === 'surprise' ? 1000 : e === 'jump' ? 800 : 2500)
@@ -85,7 +87,7 @@ export default function PetScene() {
         <ambientLight intensity={1.2} />
         <directionalLight position={[5, 10, 5]} intensity={1.5} castShadow />
         <pointLight position={[-3, 3, 3]} intensity={0.6} color="#ffb7c5" />
-        <PetModel emotion={emotion} onFlash={triggerFlash} />
+        <PetModel emotion={emotion} onFlash={triggerFlash} interactionTime={interactionTimeRef.current} />
         <OrbitControls
           enablePan={false}
           minDistance={1.5}
